@@ -28,13 +28,15 @@ def format_stats_embed(
 ) -> dict:
     best = f"{stats['best']}/6" if stats["best"] is not None else "—"
     worst = f"{stats['worst']}/6" if stats["worst"] is not None else "—"
+    avg = stats["average"]
+    avg_str = f"{avg:.2f}" if stats["fails"] == 0 else f"{avg:.2f} (X/6 counts as 7)"
     lines = [
-        f"**Games Played** : {stats['total']}",
-        f"**Wins**         : {stats['wins']}  ({stats['win_rate']:.1f}%)",
-        f"**Fails (X/6)**  : {stats['fails']}",
-        f"**Best Game**    : {best}",
-        f"**Worst Win**    : {worst}",
-        f"**Average**      : {stats['average']:.2f} guesses",
+        f"**Games Played**: {stats['total']}",
+        f"**Wins**: {stats['wins']} ({stats['win_rate']:.1f}%)",
+        f"**Fails (X/6)**: {stats['fails']}",
+        f"**Best Game**: {best}",
+        f"**Worst Win**: {worst}",
+        f"**Average**: {avg_str}",
     ]
     return {
         "title": f"Wordle Stats — {display_name}",

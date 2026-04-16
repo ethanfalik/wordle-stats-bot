@@ -1,16 +1,19 @@
 import re
 import discord
-from typing import Optional
+from datetime import date, timedelta
 
-WORDLE_NUM_RE = re.compile(r"Wordle\s+(?:No\.?\s*)?([\d,]+)", re.IGNORECASE)
-SCORE_USER_RE = re.compile(r"([1-6X])/6\s*:\s*<@!?(\d+)>", re.IGNORECASE)
+# Wordle puzzle #1 was published on 2021-06-19
+_WORDLE_EPOCH = date(2021, 6, 19)
+
+# Matches a score line: "4/6: ..." or "👑 4/6: ..."
+_SCORE_LINE_RE = re.compile(r"([1-6X])/6\s*:(.+?)(?=\n|$)", re.IGNORECASE)
+# Matches every Discord mention on a line
+_MENTION_RE = re.compile(r"<@!?(\d+)>")
 
 
-def _parse_wordle_number(text: str) -> Optional[int]:
-    m = WORDLE_NUM_RE.search(text)
-    if not m:
-        return None
-    return int(m.group(1).replace(",", ""))
+def _wordle_number(msg_date: date) -> int:
+    # The summary bot reports "yesterday's results"
+    return (msg_date - timedelta(days=1) - _WORDLE_EPOCH).days + 1
 
 
 def _parse_score(raw: str) -> int:
@@ -19,22 +22,21 @@ def _parse_score(raw: str) -> int:
 
 def parse_message(message: discord.Message) -> list[dict]:
     content = message.content
-    wordle_number = _parse_wordle_number(content)
-    pairs = SCORE_USER_RE.findall(content)
-    if not pairs:
-        return []
+    wordle_num = _wordle_number(message.created_at.date())
 
     results = []
-    for score_str, user_id in pairs:
-        results.append(
-            {
-                "message_id": str(message.id),
-                "channel_id": str(message.channel.id),
-                "guild_id": str(message.guild.id) if message.guild else "0",
-                "user_id": user_id,
-                "wordle_number": wordle_number,
-                "score": _parse_score(score_str),
-                "timestamp": message.created_at.isoformat(),
-            }
-        )
+    for line_match in _SCORE_LINE_RE.finditer(content):
+        score = _parse_score(line_match.group(1))
+        for user_id in _MENTION_RE.findall(line_match.group(2).strip()):
+            results.append(
+                {
+                    "message_id": str(message.id),
+                    "channel_id": str(message.channel.id),
+                    "guild_id": str(message.guild.id) if message.guild else "0",
+                    "user_id": user_id,
+                    "wordle_number": wordle_num,
+                    "score": score,
+                    "timestamp": message.created_at.isoformat(),
+                }
+            )
     return results

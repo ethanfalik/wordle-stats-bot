@@ -21,12 +21,22 @@ async def init_db(db_path: str = DB_PATH) -> None:
             )
         """)
         await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_results_user_channel
+            ON wordle_results(user_id, channel_id)
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS scan_state (
-                channel_id      TEXT PRIMARY KEY,
-                last_message_id TEXT,
-                last_scan_time  TEXT
+                channel_id          TEXT PRIMARY KEY,
+                last_message_id     TEXT,
+                earliest_scanned_dt TEXT,
+                last_scan_time      TEXT
             )
         """)
+        # Migrate existing scan_state tables that predate earliest_scanned_dt
+        try:
+            await db.execute("ALTER TABLE scan_state ADD COLUMN earliest_scanned_dt TEXT")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -34,9 +44,12 @@ async def upsert_result(db_path: str, row: dict) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT OR IGNORE INTO wordle_results
+            INSERT INTO wordle_results
                 (message_id, channel_id, guild_id, user_id, wordle_number, score, timestamp)
             VALUES (:message_id, :channel_id, :guild_id, :user_id, :wordle_number, :score, :timestamp)
+            ON CONFLICT(message_id, user_id) DO UPDATE SET
+                score         = excluded.score,
+                wordle_number = excluded.wordle_number
             """,
             row,
         )
@@ -49,9 +62,12 @@ async def upsert_results_bulk(db_path: str, rows: list[dict]) -> int:
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.executemany(
             """
-            INSERT OR IGNORE INTO wordle_results
+            INSERT INTO wordle_results
                 (message_id, channel_id, guild_id, user_id, wordle_number, score, timestamp)
             VALUES (:message_id, :channel_id, :guild_id, :user_id, :wordle_number, :score, :timestamp)
+            ON CONFLICT(message_id, user_id) DO UPDATE SET
+                score         = excluded.score,
+                wordle_number = excluded.wordle_number
             """,
             rows,
         )
@@ -83,26 +99,40 @@ async def get_results(
     return [dict(r) for r in rows]
 
 
-async def get_scan_state(db_path: str, channel_id: str) -> Optional[str]:
+async def get_scan_state(db_path: str, channel_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Returns (last_message_id, earliest_scanned_dt)."""
     async with aiosqlite.connect(db_path) as db:
         async with db.execute(
-            "SELECT last_message_id FROM scan_state WHERE channel_id = ?",
+            "SELECT last_message_id, earliest_scanned_dt FROM scan_state WHERE channel_id = ?",
             (str(channel_id),),
         ) as cursor:
             row = await cursor.fetchone()
-    return row[0] if row else None
+    if row:
+        return row[0], row[1]
+    return None, None
 
 
-async def update_scan_state(db_path: str, channel_id: str, last_message_id: str) -> None:
+async def update_scan_state(
+    db_path: str,
+    channel_id: str,
+    last_message_id: str,
+    earliest_scanned_dt: Optional[str] = None,
+) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT INTO scan_state (channel_id, last_message_id, last_scan_time)
-            VALUES (?, ?, ?)
+            INSERT INTO scan_state (channel_id, last_message_id, earliest_scanned_dt, last_scan_time)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(channel_id) DO UPDATE SET
-                last_message_id = excluded.last_message_id,
-                last_scan_time  = excluded.last_scan_time
+                last_message_id     = excluded.last_message_id,
+                earliest_scanned_dt = COALESCE(excluded.earliest_scanned_dt, scan_state.earliest_scanned_dt),
+                last_scan_time      = excluded.last_scan_time
             """,
-            (str(channel_id), str(last_message_id), datetime.now(timezone.utc).isoformat()),
+            (
+                str(channel_id),
+                str(last_message_id),
+                earliest_scanned_dt,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
         await db.commit()

@@ -49,17 +49,32 @@ def parse_period(text: str) -> Optional[datetime]:
 async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime] = None) -> int:
     """
     Crawl channel history, parse Wordle results, and persist to SQLite.
-    Returns the number of new rows inserted.
+    Returns the number of rows upserted.
     """
-    last_id = await get_scan_state(DB_PATH, str(channel.id))
+    last_id, earliest_dt_str = await get_scan_state(DB_PATH, str(channel.id))
+    earliest_dt = datetime.fromisoformat(earliest_dt_str) if earliest_dt_str else None
 
-    # Prefer the stored message bookmark over the time-based cutoff
-    if last_id:
+    # If the requested window goes further back than what we've already scanned,
+    # start from after_dt so the gap gets filled.  Otherwise use last_id to
+    # pick up only new messages.
+    backfill_needed = (
+        after_dt is not None
+        and earliest_dt is not None
+        and after_dt < earliest_dt
+    )
+
+    if last_id and not backfill_needed:
         after_target = discord.Object(id=int(last_id))
     elif after_dt:
         after_target = after_dt
     else:
         after_target = None
+
+    # Track the earliest point we're scanning from so future calls can detect gaps
+    if after_dt is not None:
+        new_earliest = min(after_dt, earliest_dt) if earliest_dt else after_dt
+    else:
+        new_earliest = earliest_dt
 
     batch: list[dict] = []
     last_msg_id: Optional[str] = None
@@ -72,7 +87,6 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
         batch.extend(rows)
         last_msg_id = str(msg.id)
 
-        # Flush every 200 rows and yield the event loop
         if len(batch) >= 200:
             count += await upsert_results_bulk(DB_PATH, batch)
             batch = []
@@ -83,7 +97,12 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
         count += await upsert_results_bulk(DB_PATH, batch)
 
     if last_msg_id:
-        await update_scan_state(DB_PATH, str(channel.id), last_msg_id)
+        await update_scan_state(
+            DB_PATH,
+            str(channel.id),
+            last_msg_id,
+            new_earliest.isoformat() if new_earliest else None,
+        )
 
     return count
 
@@ -125,7 +144,6 @@ async def slash_stats(interaction: discord.Interaction, period: str = "") -> Non
     await interaction.response.defer(thinking=True)
     cutoff, period_label = _resolve_period(period)
 
-    # Incremental scan before querying
     await scan_channel(interaction.channel, after_dt=cutoff)
 
     rows = await get_results(DB_PATH, str(interaction.user.id), str(interaction.channel.id), cutoff)
@@ -184,13 +202,21 @@ def _resolve_period(period: str) -> tuple[Optional[datetime], str]:
 
 @bot.event
 async def on_message(message: discord.Message) -> None:
-    if message.author.bot and message.guild:
+    if message.guild:
         rows = parse_message(message)
         for row in rows:
             await upsert_result(DB_PATH, row)
         if rows:
             await update_scan_state(DB_PATH, str(message.channel.id), str(message.id))
     await bot.process_commands(message)
+
+
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message) -> None:
+    if after.guild:
+        rows = parse_message(after)
+        for row in rows:
+            await upsert_result(DB_PATH, row)
 
 
 # ---------------------------------------------------------------------------
