@@ -51,8 +51,11 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
     Crawl channel history, parse Wordle results, and persist to SQLite.
     Returns the number of rows upserted.
     """
+    print(f"[scan] starting #{channel.name} | after_dt={after_dt}", flush=True)
+
     last_id, earliest_dt_str = await get_scan_state(DB_PATH, str(channel.id))
     earliest_dt = datetime.fromisoformat(earliest_dt_str) if earliest_dt_str else None
+    print(f"[scan] state: last_id={last_id} earliest_dt={earliest_dt_str}", flush=True)
 
     # If the requested window goes further back than what we've already scanned,
     # start from after_dt so the gap gets filled.  Otherwise use last_id to
@@ -65,10 +68,13 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
 
     if last_id and not backfill_needed:
         after_target = discord.Object(id=int(last_id))
+        print(f"[scan] incremental from message id={last_id}", flush=True)
     elif after_dt:
         after_target = after_dt
+        print(f"[scan] {'backfill' if backfill_needed else 'fresh'} from after_dt={after_dt}", flush=True)
     else:
         after_target = None
+        print("[scan] full scan from beginning", flush=True)
 
     # Track the earliest point we're scanning from so future calls can detect gaps
     if after_dt is not None:
@@ -88,15 +94,19 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
         last_msg_id = str(msg.id)
 
         if len(batch) >= 200:
+            print(f"[scan] flushing batch at msg #{i} | upserted so far: {count}", flush=True)
             count += await upsert_results_bulk(DB_PATH, batch)
             batch = []
         if i % 100 == 0:
+            print(f"[scan] processed {i} messages | wordle rows found: {count + len(batch)}", flush=True)
             await asyncio.sleep(0)
 
+    print(f"[scan] loop done | total messages scanned, flushing final batch of {len(batch)}", flush=True)
     if batch:
         count += await upsert_results_bulk(DB_PATH, batch)
 
     if last_msg_id:
+        print(f"[scan] saving state | last_msg_id={last_msg_id}", flush=True)
         await update_scan_state(
             DB_PATH,
             str(channel.id),
@@ -104,6 +114,7 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
             new_earliest.isoformat() if new_earliest else None,
         )
 
+    print(f"[scan] done | {count} rows upserted", flush=True)
     return count
 
 
@@ -131,6 +142,7 @@ def _make_embed(data: dict) -> discord.Embed:
 @bot.tree.command(name="scan", description="Scan this channel's history for Wordle results (admin only).")
 @app_commands.default_permissions(manage_guild=True)
 async def slash_scan(interaction: discord.Interaction) -> None:
+    print(f"[/scan] called by {interaction.user} in #{interaction.channel.name}", flush=True)
     await interaction.response.defer(thinking=True)
     count = await scan_channel(interaction.channel)
     await interaction.followup.send(
@@ -141,11 +153,13 @@ async def slash_scan(interaction: discord.Interaction) -> None:
 @bot.tree.command(name="stats", description="Show your Wordle stats.")
 @app_commands.describe(period='Time window, e.g. "3 months", "1 year". Leave blank for all time.')
 async def slash_stats(interaction: discord.Interaction, period: str = "") -> None:
+    print(f"[/stats] called by {interaction.user} | period='{period}'", flush=True)
     await interaction.response.defer(thinking=True)
     cutoff, period_label = _resolve_period(period)
 
     await scan_channel(interaction.channel, after_dt=cutoff)
 
+    print(f"[/stats] querying DB for user={interaction.user.id}", flush=True)
     rows = await get_results(DB_PATH, str(interaction.user.id), str(interaction.channel.id), cutoff)
     stats = calculate_stats(rows)
 
@@ -204,6 +218,8 @@ def _resolve_period(period: str) -> tuple[Optional[datetime], str]:
 async def on_message(message: discord.Message) -> None:
     if message.guild:
         rows = parse_message(message)
+        if rows:
+            print(f"[on_message] {len(rows)} row(s) parsed from msg {message.id} by {message.author}", flush=True)
         for row in rows:
             await upsert_result(DB_PATH, row)
         if rows:
@@ -215,6 +231,8 @@ async def on_message(message: discord.Message) -> None:
 async def on_message_edit(before: discord.Message, after: discord.Message) -> None:
     if after.guild:
         rows = parse_message(after)
+        if rows:
+            print(f"[on_message_edit] {len(rows)} row(s) updated from msg {after.id}", flush=True)
         for row in rows:
             await upsert_result(DB_PATH, row)
 
