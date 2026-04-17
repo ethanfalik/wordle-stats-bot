@@ -27,7 +27,9 @@ def parse_message(message: discord.Message) -> list[dict]:
     results = []
     for line_match in _SCORE_LINE_RE.finditer(content):
         score = _parse_score(line_match.group(1))
-        for user_id in _MENTION_RE.findall(line_match.group(2).strip()):
+        users = _MENTION_RE.findall(line_match.group(2).strip())
+        print(f"[parser] msg={message.id} wordle=#{wordle_num} score={score}/6 users={users}", flush=True)
+        for user_id in users:
             results.append(
                 {
                     "message_id": str(message.id),
