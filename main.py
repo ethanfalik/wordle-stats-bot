@@ -76,8 +76,12 @@ async def scan_channel(channel: discord.TextChannel, after_dt: Optional[datetime
         after_target = None
         print("[scan] full scan from beginning", flush=True)
 
-    # Track the earliest point we're scanning from so future calls can detect gaps
-    if after_dt is not None:
+    # Track the earliest point we're scanning from so future calls can detect gaps.
+    # A true full scan (after_target is None) marks everything as covered via a
+    # sentinel date so period-based stats never trigger a spurious backfill.
+    if after_target is None:
+        new_earliest = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    elif after_dt is not None:
         new_earliest = min(after_dt, earliest_dt) if earliest_dt else after_dt
     else:
         new_earliest = earliest_dt
