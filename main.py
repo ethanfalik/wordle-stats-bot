@@ -150,8 +150,15 @@ async def slash_scan(interaction: discord.Interaction) -> None:
 
 
 async def _run_scan(channel: discord.TextChannel) -> None:
-    count = await scan_channel(channel)
-    await channel.send(f"Scan complete. **{count}** new Wordle result(s) stored from #{channel.name}.")
+    try:
+        count = await scan_channel(channel)
+        await channel.send(f"Scan complete. **{count}** new Wordle result(s) stored from #{channel.name}.")
+    except discord.errors.DiscordServerError as e:
+        print(f"[scan] Discord server error: {e}", flush=True)
+        await channel.send(f"Scan failed: Discord returned a server error (503). Try again in a moment.")
+    except Exception as e:
+        print(f"[scan] Unexpected error: {e}", flush=True)
+        await channel.send(f"Scan failed with an unexpected error: {e}")
 
 
 @bot.tree.command(name="stats", description="Show your Wordle stats.")
