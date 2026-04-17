@@ -143,11 +143,15 @@ def _make_embed(data: dict) -> discord.Embed:
 @app_commands.default_permissions(manage_guild=True)
 async def slash_scan(interaction: discord.Interaction) -> None:
     print(f"[/scan] called by {interaction.user} in #{interaction.channel.name}", flush=True)
-    await interaction.response.defer(thinking=True)
-    count = await scan_channel(interaction.channel)
-    await interaction.followup.send(
-        f"Scan complete. **{count}** new Wordle result(s) stored from #{interaction.channel.name}."
+    await interaction.response.send_message(
+        f"Scan started for #{interaction.channel.name}. I'll post here when it's done."
     )
+    asyncio.create_task(_run_scan(interaction.channel))
+
+
+async def _run_scan(channel: discord.TextChannel) -> None:
+    count = await scan_channel(channel)
+    await channel.send(f"Scan complete. **{count}** new Wordle result(s) stored from #{channel.name}.")
 
 
 @bot.tree.command(name="stats", description="Show your Wordle stats.")
